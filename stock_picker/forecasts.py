@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from math import exp, log, sqrt
 from typing import Protocol
@@ -37,6 +38,12 @@ def _validate_history(history: pd.DataFrame, minimum_rows: int = 40) -> pd.DataF
     if clean.empty or float(clean["close"].iloc[-1]) <= 0:
         raise ValueError("History does not contain a valid positive closing price.")
     return clean
+
+
+def _stable_forecast_seed(base_seed: int, ticker: str, as_of: pd.Timestamp, horizon: int) -> int:
+    """Create a repeatable per-symbol, per-date seed independent of Python hash randomization."""
+    payload = f"{base_seed}|{ticker.upper()}|{pd.Timestamp(as_of).isoformat()}|{horizon}".encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big") % (2**31)
 
 
 class TrendBaselineForecaster:
@@ -119,9 +126,12 @@ class KronosForecaster:
         sample_count: int = 5,
         temperature: float = 1.0,
         top_p: float = 0.9,
+        seed: int = 42,
     ):
         if variant not in self.MODEL_SETTINGS:
             raise ValueError(f"Unsupported Kronos variant: {variant}")
+        if sample_count <= 0:
+            raise ValueError("sample_count must be positive.")
         self.variant = variant
         self.name = variant
         self.device = device
@@ -129,6 +139,7 @@ class KronosForecaster:
         self.sample_count = sample_count
         self.temperature = temperature
         self.top_p = top_p
+        self.seed = seed
         self._predictor = None
 
     def _load(self):
@@ -142,6 +153,8 @@ class KronosForecaster:
         settings = self.MODEL_SETTINGS[self.variant]
         tokenizer = KronosTokenizer.from_pretrained(settings["tokenizer"])
         model = Kronos.from_pretrained(settings["model"])
+        tokenizer.eval()
+        model.eval()
         self._predictor = KronosPredictor(
             model,
             tokenizer,
@@ -156,6 +169,8 @@ class KronosForecaster:
 
     def forecast(self, ticker: str, history: pd.DataFrame, horizon: int) -> Forecast:
         clean = _validate_history(history)
+        if horizon <= 0:
+            raise ValueError("Horizon must be positive.")
         predictor = self._load()
         settings = self.MODEL_SETTINGS[self.variant]
         lookback = min(self.lookback, settings["max_context"], len(clean))
@@ -167,8 +182,19 @@ class KronosForecaster:
             raise ValueError(f"Kronos history is missing columns: {missing}")
         context["amount"] = context["volume"] * context[["open", "high", "low", "close"]].mean(axis=1)
 
+        as_of = pd.Timestamp(context.index[-1])
+        forecast_seed = _stable_forecast_seed(self.seed, ticker, as_of, horizon)
+        try:
+            import torch
+        except ImportError as exc:
+            raise RuntimeError("PyTorch is required for Kronos forecasts.") from exc
+        np.random.seed(forecast_seed % (2**32 - 1))
+        torch.manual_seed(forecast_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(forecast_seed)
+
         x_timestamp = pd.Series(pd.to_datetime(context.index), index=context.index)
-        future_index = pd.bdate_range(pd.Timestamp(context.index[-1]) + pd.Timedelta(days=1), periods=horizon)
+        future_index = pd.bdate_range(as_of + pd.Timedelta(days=1), periods=horizon)
         y_timestamp = pd.Series(future_index)
         predicted = predictor.predict(
             df=context[["open", "high", "low", "close", "volume", "amount"]],
@@ -195,7 +221,7 @@ class KronosForecaster:
 
         return Forecast(
             ticker=ticker,
-            as_of=pd.Timestamp(context.index[-1]),
+            as_of=as_of,
             horizon=horizon,
             model=self.name,
             current_price=current_price,
