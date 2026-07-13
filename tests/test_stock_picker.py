@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 
 from stock_picker.backtest import summarize_backtest, walk_forward_backtest
+from stock_picker.cli import _resolve_tickers, build_parser
 from stock_picker.data import normalize_ohlcv
 from stock_picker.forecasts import (
     Forecast,
@@ -155,3 +156,8 @@ def test_backtest_rejects_low_agreement_signal():
         minimum_direction_agreement=0.80,
     )
     assert (observations["signal"] == 0).all()
+
+
+def test_explicit_tickers_override_file_and_are_deduplicated():
+    args = build_parser().parse_args(["--tickers", "aapl", "MSFT", "AAPL", "--limit", "2"])
+    assert _resolve_tickers(args) == ["AAPL", "MSFT"]
