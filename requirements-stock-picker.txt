@@ -1,0 +1,3 @@
+# Prototype market data and tests. Kronos/PyTorch dependencies remain in requirements.txt.
+yfinance>=0.2.54,<1.0
+pytest>=8.0,<9.0
