@@ -13,6 +13,7 @@ This branch preserves the upstream Kronos model and adds a research-first U.S. s
 - Supports robust multi-seed ensembles using the median forecast, seed-direction agreement, and return dispersion.
 - Runs walk-forward historical tests with directional accuracy, range coverage, forecast error, signal win rate, and transaction-cost-adjusted returns.
 - Rejects simulated ensemble trades when seed-direction agreement is below the configured threshold.
+- Includes a resumable PowerShell research matrix for comparing baseline and ensemble results across multiple symbols and horizons.
 - Does **not** place orders or connect to a broker.
 
 Free Yahoo data is for prototyping and paper research, not a guaranteed production feed. Recommendations are experimental model output, not financial advice.
@@ -52,12 +53,12 @@ For an actual research scan, prefer the multi-seed ensemble:
 python -m stock_picker `
   --model kronos-mini `
   --device cpu `
-  --limit 3 `
+  --tickers AAPL MSFT NVDA `
   --ensemble-seeds 1 7 42 99 123 `
   --sample-count 5
 ```
 
-The scan creates:
+`--tickers` overrides the configured ticker file. The scan creates:
 
 - `outputs/latest_rankings.csv` — one aggregate row per ticker.
 - `outputs/latest_forecasts.csv` — separate rows for each ticker and horizon, including `direction_agreement`, `return_dispersion`, and `ensemble_size`.
@@ -79,7 +80,7 @@ python -m stock_picker `
   --mode backtest `
   --model kronos-mini `
   --device cpu `
-  --limit 1 `
+  --tickers AAPL `
   --horizons 10 `
   --max-points 20 `
   --step 20 `
@@ -109,6 +110,27 @@ Important metrics:
 
 The default backtest signal threshold is 3%, the default ensemble agreement threshold is 80%, and the default cost assumption is 10 basis points on both entry and exit. These can be changed with `--signal-threshold`, `--minimum-direction-agreement`, and `--transaction-cost-bps`.
 
+## Resumable research matrix
+
+Use the matrix runner to compare the trend baseline and Kronos ensemble across several stocks and all three horizons:
+
+```powershell
+.\scripts\run_stock_picker_matrix.ps1
+```
+
+The default matrix evaluates MSFT, NVDA, and GOOGL at 5, 10, and 20 trading days. Each ticker/model/horizon case is saved separately under `outputs\research_matrix`. Re-running the script skips completed cases unless `-Force` is supplied, so an interrupted CPU experiment can continue without starting over.
+
+Customize the universe or test size with PowerShell parameters:
+
+```powershell
+.\scripts\run_stock_picker_matrix.ps1 `
+  -Tickers MSFT,NVDA,GOOGL,AMZN,AVGO `
+  -Horizons 5,10,20 `
+  -MaxPoints 20
+```
+
+The script builds `outputs\research_matrix\combined_summary.csv` and adds `screen_pass`, an intentionally strict initial filter requiring at least 20 observations, positive improvement over no-change, positive return correlation, better-than-random direction and signal win rates, and positive average net returns. Passing that screen is not proof of a tradable strategy; it only identifies configurations worth deeper out-of-sample testing.
+
 ## GPU note
 
 After the NVIDIA driver is repaired and `nvidia-smi` works, reinstall a CUDA-enabled PyTorch build in the virtual environment before using:
@@ -130,7 +152,7 @@ Kronos is not accepted as useful merely because its forecast chart looks convinc
 
 ## Next milestones
 
-1. Run multi-seed ensemble tests across several stocks and all three horizons.
+1. Complete the resumable multi-stock, multi-horizon research matrix.
 2. Add historical index membership to reduce survivorship bias.
 3. Calibrate ensemble confidence and forecast ranges against out-of-sample outcomes.
 4. Add market and sector regime features.
