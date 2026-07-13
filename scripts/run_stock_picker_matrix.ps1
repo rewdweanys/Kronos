@@ -2,6 +2,8 @@
 param(
     [string[]]$Tickers = @("MSFT", "NVDA", "GOOGL"),
     [int[]]$Horizons = @(5, 10, 20),
+    [ValidateSet("baseline", "momentum", "mean-reversion")]
+    [string[]]$BenchmarkModels = @("baseline", "momentum", "mean-reversion"),
     [int[]]$EnsembleSeeds = @(1, 7, 42, 99, 123),
     [ValidateSet("kronos-mini", "kronos-small", "kronos-base")]
     [string]$Model = "kronos-mini",
@@ -13,7 +15,7 @@ param(
     [double]$SignalThreshold = 0.03,
     [double]$TransactionCostBps = 10.0,
     [string]$OutputDir = "outputs\research_matrix",
-    [switch]$SkipBaseline,
+    [switch]$SkipBenchmarks,
     [switch]$Force
 )
 
@@ -34,11 +36,13 @@ function Invoke-ResearchCase {
     param(
         [Parameter(Mandatory)] [string]$Ticker,
         [Parameter(Mandatory)] [int]$Horizon,
-        [Parameter(Mandatory)] [ValidateSet("baseline", "ensemble")] [string]$Kind
+        [Parameter(Mandatory)]
+        [ValidateSet("baseline", "momentum", "mean-reversion", "ensemble")]
+        [string]$Kind
     )
 
     $tickerName = $Ticker.Trim().ToUpperInvariant()
-    $modelName = if ($Kind -eq "baseline") { "baseline" } else { $Model }
+    $modelName = if ($Kind -eq "ensemble") { $Model } else { $Kind }
     $prefix = Join-Path $OutputDir ("{0}_{1}_{2}d" -f $tickerName, $Kind, $Horizon)
     $observationsPath = "${prefix}_observations.csv"
     $summaryPath = "${prefix}_summary.csv"
@@ -82,8 +86,10 @@ function Invoke-ResearchCase {
 
 foreach ($ticker in $Tickers) {
     foreach ($horizon in $Horizons) {
-        if (-not $SkipBaseline) {
-            Invoke-ResearchCase -Ticker $ticker -Horizon $horizon -Kind baseline
+        if (-not $SkipBenchmarks) {
+            foreach ($benchmark in $BenchmarkModels) {
+                Invoke-ResearchCase -Ticker $ticker -Horizon $horizon -Kind $benchmark
+            }
         }
         Invoke-ResearchCase -Ticker $ticker -Horizon $horizon -Kind ensemble
     }
@@ -96,7 +102,11 @@ $combined = foreach ($file in $summaryFiles) {
     foreach ($row in (Import-Csv $file.FullName)) {
         $observations = [int]$row.observations
         $maeImprovement = [double]$row.mae_improvement
-        $correlation = [double]$row.return_correlation
+        $correlation = if ([string]::IsNullOrWhiteSpace($row.return_correlation)) {
+            [double]::NaN
+        } else {
+            [double]$row.return_correlation
+        }
         $directionalAccuracy = [double]$row.directional_accuracy
         $averageNetReturn = [double]$row.average_net_return
         $signalWinRate = if ([string]::IsNullOrWhiteSpace($row.signal_win_rate)) {
@@ -108,6 +118,7 @@ $combined = foreach ($file in $summaryFiles) {
         $screenPass = (
             $observations -ge 20 -and
             $maeImprovement -gt 0 -and
+            (-not [double]::IsNaN($correlation)) -and
             $correlation -gt 0 -and
             $directionalAccuracy -gt 0.50 -and
             (-not [double]::IsNaN($signalWinRate)) -and
