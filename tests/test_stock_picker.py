@@ -1,8 +1,9 @@
 import numpy as np
 import pandas as pd
 
+from stock_picker.backtest import summarize_backtest, walk_forward_backtest
 from stock_picker.data import normalize_ohlcv
-from stock_picker.forecasts import TrendBaselineForecaster
+from stock_picker.forecasts import TrendBaselineForecaster, _stable_forecast_seed
 from stock_picker.scoring import aggregate_forecasts
 
 
@@ -60,3 +61,36 @@ def test_normalize_ohlcv_accepts_single_ticker_multiindex_ticker_first():
 
     assert list(normalized.columns) == ["open", "high", "low", "close", "volume"]
     assert normalized.shape == history.shape
+
+
+def test_stable_forecast_seed_is_repeatable_and_horizon_specific():
+    as_of = pd.Timestamp("2026-07-10")
+    first = _stable_forecast_seed(42, "AAPL", as_of, 5)
+    second = _stable_forecast_seed(42, "AAPL", as_of, 5)
+    different_horizon = _stable_forecast_seed(42, "AAPL", as_of, 10)
+
+    assert first == second
+    assert first != different_horizon
+
+
+def test_walk_forward_backtest_uses_future_target_and_summarizes():
+    history = make_history(rows=180, daily_return=0.002)
+    observations = walk_forward_backtest(
+        "TEST",
+        history,
+        TrendBaselineForecaster(),
+        horizon=10,
+        minimum_history=80,
+        step=20,
+        max_points=3,
+        transaction_cost_bps=10,
+    )
+
+    assert len(observations) == 3
+    assert (observations["target_date"] > observations["as_of"]).all()
+    assert (observations["actual_return"] > 0).all()
+
+    summary = summarize_backtest(observations)
+    assert len(summary) == 1
+    assert summary.loc[0, "observations"] == 3
+    assert summary.loc[0, "directional_accuracy"] == 1.0
