@@ -1,6 +1,7 @@
 """Research-first stock ranking tools built around the Kronos model."""
 
 from .backtest import BacktestObservation, summarize_backtest, walk_forward_backtest
+from .baselines import MeanReversionForecaster, MomentumForecaster
 from .forecasts import (
     Forecast,
     KronosEnsembleForecaster,
@@ -15,6 +16,8 @@ __all__ = [
     "KronosForecaster",
     "KronosEnsembleForecaster",
     "TrendBaselineForecaster",
+    "MomentumForecaster",
+    "MeanReversionForecaster",
     "aggregate_ensemble_forecasts",
     "Recommendation",
     "aggregate_forecasts",
