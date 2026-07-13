@@ -58,11 +58,12 @@ Write-Step "Installing Kronos and stock-picker dependencies"
 & $Python -m pip install -r requirements.txt
 & $Python -m pip install -r requirements-stock-picker.txt
 
-Write-Step "Running local diagnostics"
-& $Python -m stock_picker doctor
+Write-Step "Verifying imports and running unit tests"
+& $Python -c "import torch; print('PyTorch:', torch.__version__); print('CUDA available:', torch.cuda.is_available())"
+& $Python -m pytest tests\test_stock_picker.py
 
 Write-Host "`nSetup complete." -ForegroundColor Green
 Write-Host "Activate with: .\.venv\Scripts\Activate.ps1"
-Write-Host "First baseline scan: python -m stock_picker scan --model baseline"
-Write-Host "Download Kronos-mini: python -m stock_picker warmup --model kronos-mini"
+Write-Host "First baseline scan: python -m stock_picker --model baseline --limit 10"
+Write-Host "First Kronos CPU scan: python -m stock_picker --model kronos-mini --device cpu --limit 3"
 Write-Host "Your NVIDIA GPU currently reports a driver error. CPU mode works for initial testing."
