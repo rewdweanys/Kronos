@@ -22,15 +22,15 @@ git clone https://github.com/rewdweanys/Kronos.git
 cd Kronos
 git switch stock-picker-v1
 Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\setup_stock_picker_windows.ps1
+.\scripts\setup_stock_picker_windows.ps1 -SkipClone
 ```
 
-The script installs Python 3.11 through `winget` when necessary, creates `.venv-stock-picker`, installs the upstream Kronos requirements plus prototype dependencies, and verifies PyTorch. It leaves Python 3.14 installed.
+The script installs Python 3.11 through `winget` when necessary, creates `.venv`, installs the upstream Kronos requirements plus prototype dependencies, verifies PyTorch, and runs the unit tests. It leaves Python 3.14 installed.
 
 Activate later with:
 
 ```powershell
-.\.venv-stock-picker\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 ```
 
 ## First CPU test
