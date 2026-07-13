@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 
 from stock_picker.backtest import summarize_backtest, walk_forward_backtest
+from stock_picker.baselines import MeanReversionForecaster, MomentumForecaster
 from stock_picker.cli import _resolve_tickers, build_parser
 from stock_picker.data import normalize_ohlcv
 from stock_picker.forecasts import (
@@ -49,6 +50,18 @@ def test_baseline_forecast_is_well_formed():
     assert forecast.expected_close > forecast.current_price
     assert forecast.range_low <= forecast.expected_close <= forecast.range_high
     assert 0 <= forecast.confidence <= 1
+
+
+def test_fast_benchmark_forecasts_are_well_formed_and_distinct():
+    history = make_history(daily_return=0.002)
+    momentum = MomentumForecaster().forecast("TEST", history, 10)
+    mean_reversion = MeanReversionForecaster().forecast("TEST", history, 10)
+
+    assert momentum.expected_return > 0
+    assert mean_reversion.expected_return < 0
+    for forecast in (momentum, mean_reversion):
+        assert forecast.range_low <= forecast.expected_close <= forecast.range_high
+        assert 0 <= forecast.confidence <= 1
 
 
 def test_aggregate_forecasts_returns_buy_for_positive_trend():
