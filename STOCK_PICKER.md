@@ -10,7 +10,9 @@ This branch preserves the upstream Kronos model and adds a research-first U.S. s
 - Produces BUY, SHORT, or NEUTRAL research labels, expected return, confidence, and forecast ranges.
 - Saves both aggregate rankings and separate 5-, 10-, and 20-day forecast rows.
 - Uses repeatable per-symbol, per-date random seeds for Kronos sampling.
+- Supports robust multi-seed ensembles using the median forecast, seed-direction agreement, and return dispersion.
 - Runs walk-forward historical tests with directional accuracy, range coverage, forecast error, signal win rate, and transaction-cost-adjusted returns.
+- Rejects simulated ensemble trades when seed-direction agreement is below the configured threshold.
 - Does **not** place orders or connect to a broker.
 
 Free Yahoo data is for prototyping and paper research, not a guaranteed production feed. Recommendations are experimental model output, not financial advice.
@@ -37,17 +39,30 @@ Activate later with:
 
 ## Current scan
 
+Single-seed commands remain available for controlled experiments:
+
 ```powershell
 python -m stock_picker --model baseline --limit 10
 python -m stock_picker --model kronos-mini --device cpu --limit 3 --seed 42 --sample-count 5
 ```
 
+For an actual research scan, prefer the multi-seed ensemble:
+
+```powershell
+python -m stock_picker `
+  --model kronos-mini `
+  --device cpu `
+  --limit 3 `
+  --ensemble-seeds 1 7 42 99 123 `
+  --sample-count 5
+```
+
 The scan creates:
 
 - `outputs/latest_rankings.csv` — one aggregate row per ticker.
-- `outputs/latest_forecasts.csv` — separate rows for each ticker and horizon.
+- `outputs/latest_forecasts.csv` — separate rows for each ticker and horizon, including `direction_agreement`, `return_dispersion`, and `ensemble_size`.
 
-Running the same model, data, seed, and sample count should now reproduce the same result. Change `--seed` to deliberately test sensitivity to a different sampling stream.
+Running the same model, data, seeds, and sample count should reproduce the same result. Change the ensemble seed list only to deliberately test a different sampling set.
 
 ## Walk-forward backtest
 
@@ -57,10 +72,22 @@ Start with the baseline because it is fast:
 python -m stock_picker --mode backtest --model baseline --limit 3 --max-points 20
 ```
 
-Then test Kronos on one ticker and a small number of historical decision dates because CPU inference is much slower:
+Then test a multi-seed Kronos ensemble on one ticker and one horizon. CPU inference is much slower because each historical decision runs every seed:
 
 ```powershell
-python -m stock_picker --mode backtest --model kronos-mini --device cpu --limit 1 --horizons 5 10 20 --max-points 3 --seed 42 --sample-count 5
+python -m stock_picker `
+  --mode backtest `
+  --model kronos-mini `
+  --device cpu `
+  --limit 1 `
+  --horizons 10 `
+  --max-points 20 `
+  --step 20 `
+  --ensemble-seeds 1 7 42 99 123 `
+  --sample-count 5 `
+  --minimum-direction-agreement 0.80 `
+  --backtest-output outputs\kronos_aapl_10_ensemble_observations.csv `
+  --summary-output outputs\kronos_aapl_10_ensemble_summary.csv
 ```
 
 Backtesting creates:
@@ -75,10 +102,12 @@ Important metrics:
 - `model_mae`: average absolute error in predicted return.
 - `no_change_mae`: error from simply predicting zero return.
 - `mae_improvement`: positive means the model beat the no-change forecast on error.
+- `average_direction_agreement`: average fraction of seeds agreeing with the ensemble direction.
+- `average_return_dispersion`: median seed-to-seed return disagreement, averaged across observations.
 - `signal_win_rate`: percentage of threshold-triggered simulated trades profitable after costs.
 - `cumulative_net_return`: compounded return across those sampled signals; overlapping tests and small samples can make this misleading, so it is not sufficient evidence by itself.
 
-The default backtest signal threshold is 3%, and the default cost assumption is 10 basis points on both entry and exit. These can be changed with `--signal-threshold` and `--transaction-cost-bps`.
+The default backtest signal threshold is 3%, the default ensemble agreement threshold is 80%, and the default cost assumption is 10 basis points on both entry and exit. These can be changed with `--signal-threshold`, `--minimum-direction-agreement`, and `--transaction-cost-bps`.
 
 ## GPU note
 
@@ -101,9 +130,10 @@ Kronos is not accepted as useful merely because its forecast chart looks convinc
 
 ## Next milestones
 
-1. Add historical index membership to reduce survivorship bias.
-2. Add multi-seed stability reports and calibrated forecast probabilities.
-3. Add market and sector regime features.
-4. Add earnings calendars, SEC filings, fundamentals, and news as separately testable feature groups.
-5. Add paper-broker execution only after out-of-sample evidence.
-6. Add ETFs, REITs, and crypto through provider and asset-class adapters.
+1. Run multi-seed ensemble tests across several stocks and all three horizons.
+2. Add historical index membership to reduce survivorship bias.
+3. Calibrate ensemble confidence and forecast ranges against out-of-sample outcomes.
+4. Add market and sector regime features.
+5. Add earnings calendars, SEC filings, fundamentals, and news as separately testable feature groups.
+6. Add paper-broker execution only after out-of-sample evidence.
+7. Add ETFs, REITs, and crypto through provider and asset-class adapters.
