@@ -15,6 +15,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Research-first U.S. stock ranking prototype")
     parser.add_argument("--mode", choices=["scan", "backtest"], default="scan")
     parser.add_argument("--tickers-file", default="config/us_large_cap.txt")
+    parser.add_argument(
+        "--tickers",
+        nargs="+",
+        default=None,
+        help="Explicit ticker symbols; when supplied, overrides --tickers-file",
+    )
     parser.add_argument("--model", choices=["baseline", "kronos-mini", "kronos-small", "kronos-base"], default="baseline")
     parser.add_argument("--device", default=None, help="cpu, cuda:0, or omit for auto-detection")
     parser.add_argument("--period", default="5y")
@@ -73,6 +79,19 @@ def _write_csv(frame: pd.DataFrame, path_value: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(path, index=False)
     return path
+
+
+def _resolve_tickers(args: argparse.Namespace) -> list[str]:
+    if args.limit <= 0:
+        raise ValueError("--limit must be positive.")
+    if args.tickers:
+        values = [str(ticker).strip().upper() for ticker in args.tickers if str(ticker).strip()]
+        tickers = list(dict.fromkeys(values))
+    else:
+        tickers = read_tickers(args.tickers_file)
+    if not tickers:
+        raise ValueError("No ticker symbols were supplied.")
+    return tickers[: args.limit]
 
 
 def _run_scan(args: argparse.Namespace, tickers: list[str], histories: dict[str, pd.DataFrame]) -> int:
@@ -182,7 +201,7 @@ def _run_backtest(args: argparse.Namespace, tickers: list[str], histories: dict[
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    tickers = read_tickers(args.tickers_file)[: args.limit]
+    tickers = _resolve_tickers(args)
     histories = download_daily(tickers, period=args.period)
     if args.mode == "backtest":
         return _run_backtest(args, tickers, histories)
