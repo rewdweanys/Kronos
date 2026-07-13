@@ -21,6 +21,9 @@ class BacktestObservation:
     predicted_return: float
     actual_return: float
     confidence: float
+    direction_agreement: float
+    return_dispersion: float
+    ensemble_size: int
     range_low: float
     range_high: float
     range_hit: bool
@@ -40,13 +43,16 @@ def walk_forward_backtest(
     step: int = 20,
     max_points: int | None = None,
     signal_threshold: float = 0.03,
+    minimum_confidence: float = 0.0,
+    minimum_direction_agreement: float = 0.80,
     transaction_cost_bps: float = 10.0,
 ) -> pd.DataFrame:
     """Evaluate forecasts using only data available at each historical decision date.
 
     The simulated strategy is long when predicted return is above ``signal_threshold``,
-    short when it is below the negative threshold, and flat otherwise. Transaction cost
-    is applied on both entry and exit.
+    short when it is below the negative threshold, and flat otherwise. Forecasts also
+    must meet confidence and ensemble direction-agreement filters. Transaction cost is
+    applied on both entry and exit.
     """
     if horizon <= 0:
         raise ValueError("horizon must be positive.")
@@ -56,6 +62,10 @@ def walk_forward_backtest(
         raise ValueError("step must be positive.")
     if max_points is not None and max_points <= 0:
         raise ValueError("max_points must be positive when supplied.")
+    if not 0.0 <= minimum_confidence <= 1.0:
+        raise ValueError("minimum_confidence must be between 0 and 1.")
+    if not 0.0 <= minimum_direction_agreement <= 1.0:
+        raise ValueError("minimum_direction_agreement must be between 0 and 1.")
 
     clean = history.sort_index().dropna(subset=["close"])
     end_positions = list(range(minimum_history - 1, len(clean) - horizon, step))
@@ -71,9 +81,13 @@ def walk_forward_backtest(
         actual_close = float(clean["close"].iloc[end_position + horizon])
         actual_return = actual_close / current_price - 1.0
 
-        if forecast.expected_return >= signal_threshold:
+        eligible = (
+            forecast.confidence >= minimum_confidence
+            and forecast.direction_agreement >= minimum_direction_agreement
+        )
+        if eligible and forecast.expected_return >= signal_threshold:
             signal = 1
-        elif forecast.expected_return <= -signal_threshold:
+        elif eligible and forecast.expected_return <= -signal_threshold:
             signal = -1
         else:
             signal = 0
@@ -96,6 +110,9 @@ def walk_forward_backtest(
                 predicted_return=forecast.expected_return,
                 actual_return=actual_return,
                 confidence=forecast.confidence,
+                direction_agreement=forecast.direction_agreement,
+                return_dispersion=forecast.return_dispersion,
+                ensemble_size=forecast.ensemble_size,
                 range_low=forecast.range_low,
                 range_high=forecast.range_high,
                 range_hit=forecast.range_low <= actual_close <= forecast.range_high,
@@ -144,6 +161,9 @@ def summarize_backtest(observations: pd.DataFrame) -> pd.DataFrame:
                 "no_change_mae": no_change_mae,
                 "mae_improvement": no_change_mae - model_mae,
                 "return_correlation": correlation,
+                "average_confidence": float(group["confidence"].mean()),
+                "average_direction_agreement": float(group["direction_agreement"].mean()),
+                "average_return_dispersion": float(group["return_dispersion"].mean()),
                 "signal_win_rate": signal_win_rate,
                 "average_net_return": average_net_return,
                 "cumulative_net_return": cumulative_net_return,
