@@ -6,9 +6,20 @@ from pathlib import Path
 import pandas as pd
 
 from .backtest import summarize_backtest, walk_forward_backtest
+from .baselines import MeanReversionForecaster, MomentumForecaster
 from .data import download_daily, read_tickers
 from .forecasts import KronosEnsembleForecaster, KronosForecaster, TrendBaselineForecaster
 from .scoring import aggregate_forecasts
+
+
+MODEL_CHOICES = [
+    "baseline",
+    "momentum",
+    "mean-reversion",
+    "kronos-mini",
+    "kronos-small",
+    "kronos-base",
+]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Explicit ticker symbols; when supplied, overrides --tickers-file",
     )
-    parser.add_argument("--model", choices=["baseline", "kronos-mini", "kronos-small", "kronos-base"], default="baseline")
+    parser.add_argument("--model", choices=MODEL_CHOICES, default="baseline")
     parser.add_argument("--device", default=None, help="cpu, cuda:0, or omit for auto-detection")
     parser.add_argument("--period", default="5y")
     parser.add_argument("--horizons", nargs="+", type=int, default=[5, 10, 20])
@@ -59,6 +70,14 @@ def _build_forecaster(args: argparse.Namespace):
         if args.ensemble_seeds:
             raise ValueError("--ensemble-seeds is only valid with a Kronos model.")
         return TrendBaselineForecaster()
+    if args.model == "momentum":
+        if args.ensemble_seeds:
+            raise ValueError("--ensemble-seeds is only valid with a Kronos model.")
+        return MomentumForecaster()
+    if args.model == "mean-reversion":
+        if args.ensemble_seeds:
+            raise ValueError("--ensemble-seeds is only valid with a Kronos model.")
+        return MeanReversionForecaster()
     if args.ensemble_seeds:
         return KronosEnsembleForecaster(
             args.model,
