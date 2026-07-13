@@ -7,7 +7,7 @@ import pandas as pd
 
 from .backtest import summarize_backtest, walk_forward_backtest
 from .data import download_daily, read_tickers
-from .forecasts import KronosForecaster, TrendBaselineForecaster
+from .forecasts import KronosEnsembleForecaster, KronosForecaster, TrendBaselineForecaster
 from .scoring import aggregate_forecasts
 
 
@@ -20,8 +20,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--period", default="5y")
     parser.add_argument("--horizons", nargs="+", type=int, default=[5, 10, 20])
     parser.add_argument("--limit", type=int, default=20)
-    parser.add_argument("--seed", type=int, default=42, help="Repeatable Kronos sampling seed")
-    parser.add_argument("--sample-count", type=int, default=5, help="Forecast paths averaged by Kronos")
+    parser.add_argument("--seed", type=int, default=42, help="Repeatable seed for single-seed Kronos")
+    parser.add_argument(
+        "--ensemble-seeds",
+        nargs="+",
+        type=int,
+        default=None,
+        help="Run a robust Kronos ensemble, for example: --ensemble-seeds 1 7 42 99 123",
+    )
+    parser.add_argument("--sample-count", type=int, default=5, help="Forecast paths averaged inside each Kronos seed")
     parser.add_argument("--output", default="outputs/latest_rankings.csv")
     parser.add_argument("--forecasts-output", default="outputs/latest_forecasts.csv")
     parser.add_argument("--backtest-output", default="outputs/backtest_observations.csv")
@@ -30,13 +37,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--step", type=int, default=20, help="Trading days between backtest decisions")
     parser.add_argument("--max-points", type=int, default=5, help="Most recent backtest decisions per ticker/horizon")
     parser.add_argument("--signal-threshold", type=float, default=0.03)
+    parser.add_argument("--minimum-confidence", type=float, default=0.0)
+    parser.add_argument(
+        "--minimum-direction-agreement",
+        type=float,
+        default=0.80,
+        help="Minimum seed-direction agreement required to open a simulated trade",
+    )
     parser.add_argument("--transaction-cost-bps", type=float, default=10.0)
     return parser
 
 
 def _build_forecaster(args: argparse.Namespace):
     if args.model == "baseline":
+        if args.ensemble_seeds:
+            raise ValueError("--ensemble-seeds is only valid with a Kronos model.")
         return TrendBaselineForecaster()
+    if args.ensemble_seeds:
+        return KronosEnsembleForecaster(
+            args.model,
+            device=args.device,
+            sample_count=args.sample_count,
+            seeds=args.ensemble_seeds,
+        )
     return KronosForecaster(
         args.model,
         device=args.device,
@@ -115,6 +138,8 @@ def _run_backtest(args: argparse.Namespace, tickers: list[str], histories: dict[
                     step=args.step,
                     max_points=args.max_points,
                     signal_threshold=args.signal_threshold,
+                    minimum_confidence=args.minimum_confidence,
+                    minimum_direction_agreement=args.minimum_direction_agreement,
                     transaction_cost_bps=args.transaction_cost_bps,
                 )
                 if not result.empty:
@@ -138,6 +163,9 @@ def _run_backtest(args: argparse.Namespace, tickers: list[str], histories: dict[
             "no_change_mae",
             "mae_improvement",
             "return_correlation",
+            "average_confidence",
+            "average_direction_agreement",
+            "average_return_dispersion",
             "signal_win_rate",
             "average_net_return",
             "cumulative_net_return",
