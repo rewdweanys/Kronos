@@ -6,6 +6,45 @@ from typing import Iterable
 import pandas as pd
 
 REQUIRED_COLUMNS = ("open", "high", "low", "close", "volume")
+_OPTIONAL_PRICE_COLUMNS = ("adj_close",)
+
+
+def _column_name(value: object) -> str:
+    return str(value).strip().lower().replace(" ", "_")
+
+
+def _flatten_single_symbol_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Flatten yfinance MultiIndex columns when the frame contains one symbol.
+
+    Depending on yfinance version and ``group_by`` behavior, a one-ticker download can
+    return either ``(ticker, field)`` or ``(field, ticker)`` columns. This locates the
+    OHLCV field level instead of assuming an ordering.
+    """
+    if not isinstance(frame.columns, pd.MultiIndex):
+        return frame
+
+    expected = set(REQUIRED_COLUMNS + _OPTIONAL_PRICE_COLUMNS)
+    level_scores: list[tuple[int, int]] = []
+    for level in range(frame.columns.nlevels):
+        names = {_column_name(value) for value in frame.columns.get_level_values(level)}
+        level_scores.append((len(names & expected), level))
+
+    coverage, field_level = max(level_scores)
+    if coverage < 4:
+        raise ValueError("Could not identify OHLCV fields in MultiIndex columns.")
+
+    for level in range(frame.columns.nlevels):
+        if level == field_level:
+            continue
+        values = frame.columns.get_level_values(level)
+        if len(pd.Index(values).unique()) > 1:
+            raise ValueError("normalize_ohlcv received data for more than one symbol.")
+
+    flattened = frame.copy()
+    flattened.columns = [
+        _column_name(value) for value in flattened.columns.get_level_values(field_level)
+    ]
+    return flattened
 
 
 def normalize_ohlcv(frame: pd.DataFrame) -> pd.DataFrame:
@@ -13,8 +52,8 @@ def normalize_ohlcv(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame(columns=REQUIRED_COLUMNS)
 
-    result = frame.copy()
-    result.columns = [str(column).strip().lower().replace(" ", "_") for column in result.columns]
+    result = _flatten_single_symbol_columns(frame.copy())
+    result.columns = [_column_name(column) for column in result.columns]
     if "adj_close" in result.columns and "close" not in result.columns:
         result["close"] = result["adj_close"]
 
