@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from math import exp, log, sqrt
-from typing import Protocol
+from typing import Iterable, Protocol
 
 import numpy as np
 import pandas as pd
@@ -21,6 +21,9 @@ class Forecast:
     range_high: float
     expected_return: float
     confidence: float
+    direction_agreement: float = 1.0
+    return_dispersion: float = 0.0
+    ensemble_size: int = 1
 
 
 class Forecaster(Protocol):
@@ -44,6 +47,57 @@ def _stable_forecast_seed(base_seed: int, ticker: str, as_of: pd.Timestamp, hori
     """Create a repeatable per-symbol, per-date seed independent of Python hash randomization."""
     payload = f"{base_seed}|{ticker.upper()}|{pd.Timestamp(as_of).isoformat()}|{horizon}".encode("utf-8")
     return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big") % (2**31)
+
+
+def aggregate_ensemble_forecasts(
+    members: Iterable[Forecast],
+    *,
+    model_name: str,
+) -> Forecast:
+    """Combine stochastic forecasts using robust statistics and explicit disagreement penalties."""
+    rows = list(members)
+    if len(rows) < 2:
+        raise ValueError("An ensemble requires at least two member forecasts.")
+
+    first = rows[0]
+    for row in rows[1:]:
+        if row.ticker != first.ticker or row.as_of != first.as_of or row.horizon != first.horizon:
+            raise ValueError("Ensemble members must share ticker, as-of date, and horizon.")
+        if not np.isclose(row.current_price, first.current_price):
+            raise ValueError("Ensemble members must share the same current price.")
+
+    returns = np.asarray([row.expected_return for row in rows], dtype=float)
+    median_return = float(np.median(returns))
+    expected_close = float(first.current_price * (1.0 + median_return))
+
+    median_sign = int(np.sign(median_return))
+    signs = np.sign(returns).astype(int)
+    if median_sign == 0:
+        direction_agreement = float(np.mean(signs == 0))
+    else:
+        direction_agreement = float(np.mean(signs == median_sign))
+
+    return_dispersion = float(np.median(np.abs(returns - median_return)))
+    member_confidence = float(np.median([row.confidence for row in rows]))
+    dispersion_scale = abs(median_return) + 0.01
+    dispersion_penalty = float(np.exp(-return_dispersion / dispersion_scale))
+    confidence = float(np.clip(member_confidence * direction_agreement * dispersion_penalty, 0.0, 1.0))
+
+    return Forecast(
+        ticker=first.ticker,
+        as_of=first.as_of,
+        horizon=first.horizon,
+        model=model_name,
+        current_price=first.current_price,
+        expected_close=expected_close,
+        range_low=float(np.quantile([row.range_low for row in rows], 0.10)),
+        range_high=float(np.quantile([row.range_high for row in rows], 0.90)),
+        expected_return=median_return,
+        confidence=confidence,
+        direction_agreement=direction_agreement,
+        return_dispersion=return_dispersion,
+        ensemble_size=len(rows),
+    )
 
 
 class TrendBaselineForecaster:
@@ -168,6 +222,16 @@ class KronosForecaster:
         self._load()
 
     def forecast(self, ticker: str, history: pd.DataFrame, horizon: int) -> Forecast:
+        return self.forecast_with_seed(ticker, history, horizon, seed=self.seed)
+
+    def forecast_with_seed(
+        self,
+        ticker: str,
+        history: pd.DataFrame,
+        horizon: int,
+        *,
+        seed: int,
+    ) -> Forecast:
         clean = _validate_history(history)
         if horizon <= 0:
             raise ValueError("Horizon must be positive.")
@@ -183,7 +247,7 @@ class KronosForecaster:
         context["amount"] = context["volume"] * context[["open", "high", "low", "close"]].mean(axis=1)
 
         as_of = pd.Timestamp(context.index[-1])
-        forecast_seed = _stable_forecast_seed(self.seed, ticker, as_of, horizon)
+        forecast_seed = _stable_forecast_seed(seed, ticker, as_of, horizon)
         try:
             import torch
         except ImportError as exc:
@@ -231,3 +295,43 @@ class KronosForecaster:
             expected_return=expected_return,
             confidence=confidence,
         )
+
+
+class KronosEnsembleForecaster:
+    """Run multiple deterministic Kronos seeds through one shared model instance."""
+
+    def __init__(
+        self,
+        variant: str = "kronos-mini",
+        *,
+        seeds: Iterable[int] = (1, 7, 42, 99, 123),
+        device: str | None = None,
+        lookback: int = 400,
+        sample_count: int = 5,
+        temperature: float = 1.0,
+        top_p: float = 0.9,
+    ):
+        unique_seeds = tuple(dict.fromkeys(int(seed) for seed in seeds))
+        if len(unique_seeds) < 2:
+            raise ValueError("Kronos ensemble requires at least two unique seeds.")
+        self.seeds = unique_seeds
+        self.name = f"{variant}-ensemble"
+        self._member = KronosForecaster(
+            variant,
+            device=device,
+            lookback=lookback,
+            sample_count=sample_count,
+            temperature=temperature,
+            top_p=top_p,
+            seed=unique_seeds[0],
+        )
+
+    def warmup(self) -> None:
+        self._member.warmup()
+
+    def forecast(self, ticker: str, history: pd.DataFrame, horizon: int) -> Forecast:
+        members = [
+            self._member.forecast_with_seed(ticker, history, horizon, seed=seed)
+            for seed in self.seeds
+        ]
+        return aggregate_ensemble_forecasts(members, model_name=self.name)
